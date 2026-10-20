@@ -119,6 +119,7 @@
   .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px; }
   .tabs { display: inline-flex; background: var(--surface-2); border-radius: 9px; padding: 3px; gap: 2px; }
   .tabs button { border: 0; background: transparent; padding: 5px 12px; border-radius: 7px; cursor: pointer; color: var(--ink-2); font-weight: 550; }
+  .tabs button:disabled { opacity: .4; cursor: default; }
   .tabs button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
   .search { flex: 1 1 200px; min-width: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 7px 12px; }
   .search::placeholder { color: var(--muted); }
@@ -211,7 +212,9 @@
     .head, .line { grid-template-columns: minmax(0, 1fr) 54px 96px; gap: 10px; padding: 0 12px; }
     .head .c-range, .line .strip { display: none; }
     .detail.open { grid-template-columns: minmax(0, 1fr); padding: 4px 12px 14px; }
-    .tabs { width: 100%; justify-content: space-between; }
+    #tabs { width: 100%; justify-content: space-between; }
+    #scoring { flex: 1; }
+    #scoring button { flex: 1; }
     .tabs button { padding: 5px 0; flex: 1; }
   }
 </style>
@@ -225,7 +228,7 @@
         Hedge projections
       </div>
       <h1 id="title">NFL projections</h1>
-      <p class="sub">PPR fantasy points for every player on the board. Each line is the projected median, so over and under are equally likely, and results are graded as games finish.</p>
+      <p class="sub"><span id="fmt-name">PPR</span> fantasy points for every player on the board. Each line is the projected median, so over and under are equally likely, and results are graded as games finish.</p>
     </div>
     <div class="meta">
       <span class="pulse idle" id="pulse" aria-hidden="true"></span>
@@ -242,6 +245,7 @@
   <nav class="games" id="games" aria-label="Filter by game"></nav>
 
   <div class="controls">
+    <div class="tabs" id="scoring" role="group" aria-label="Scoring format"></div>
     <div class="tabs" id="tabs" role="group" aria-label="Position"></div>
     <input class="search" id="search" type="search" placeholder="Search players or teams" aria-label="Search players or teams">
   </div>
@@ -257,6 +261,7 @@
 
   <footer>
     <p>Projections come from a zero-inflated gamma model fitted to each player's games so far this season, weighted toward recent weeks, then filtered by official injury reports and gameday rosters. A line locks when its game kicks off. Players who don't play are void.</p>
+    <p>Each scoring format is priced from that format's own scoring history, not by rescaling the PPR line, so the lines differ and so does the board: fewer receivers clear the minimum line once catches stop scoring. Payout calibration was fitted and back-tested on PPR only.</p>
     <p>The ladder shows Hedge's payout curve: 1.5x for being barely right, rising to 5x for a result three standard deviations past the line. Play money only.</p>
     <p id="model"></p>
   </footer>
@@ -269,7 +274,13 @@
   const PAGE = 60;
   const POSITIONS = ['All', 'QB', 'RB', 'WR', 'TE', 'K'];
   const $ = (id) => document.getElementById(id);
-  const state = { index: null, data: null, key: null, pos: 'All', game: null, q: '', sort: 'line', dir: -1, open: new Set(), limit: PAGE };
+  // File suffix per format: PPR keeps the bare name it had before the others.
+  const FORMATS = [
+    { id: 'PPR', label: 'PPR', name: 'PPR', suffix: '' },
+    { id: 'HALF', label: 'Half', name: 'Half-PPR', suffix: '-half' },
+    { id: 'STD', label: 'Std', name: 'Standard', suffix: '-std' },
+  ];
+  const state = { index: null, data: null, key: null, fmt: null, pos: 'All', game: null, q: '', sort: 'line', dir: -1, open: new Set(), limit: PAGE };
 
   // Theme: OS default, with a toggle remembered per browser.
   const root = document.documentElement;
@@ -303,14 +314,26 @@
     try {
       state.index = await getJson('data/index.json');
       const weeks = state.index.weeks;
-      const fromHash = location.hash.match(/^#(\d{4})-w(\d+)$/);
+      const fromHash = location.hash.match(/^#(\d{4})-w(\d+)(?:-(half|std|ppr))?$/);
       const cur = state.index.current;
       if (!state.key) state.key = fromHash ? fromHash[1] + '-w' + fromHash[2] : cur.season + '-w' + cur.week;
+      if (!state.fmt) {
+        let saved = null;
+        try { saved = localStorage.getItem('hedge-scoring'); } catch {}
+        state.fmt = fromHash && fromHash[3] ? fromHash[3].toUpperCase() : saved || 'PPR';
+      }
+      // A week exported before the other formats existed only has PPR.
+      const entry = weeks.find((w) => w.season + '-w' + w.week === state.key);
+      const available = (entry && entry.formats) || ['PPR'];
+      if (!available.includes(state.fmt)) state.fmt = 'PPR';
+      $('scoring').innerHTML = FORMATS.map((f) => '<button type="button" data-fmt="' + f.id + '" aria-pressed="' + (state.fmt === f.id) + '"' + (available.includes(f.id) ? '' : ' disabled') + ' title="' + f.name + '">' + f.label + '</button>').join('');
       $('week').innerHTML = weeks.map((w) => {
         const k = w.season + '-w' + w.week;
         return '<option value="' + k + '"' + (k === state.key ? ' selected' : '') + '>' + w.season + ' Week ' + w.week + (w.season === cur.season && w.week === cur.week ? ' (current)' : w.backtest ? ' (back-test)' : '') + '</option>';
       }).join('');
-      state.data = await getJson('data/' + state.key + '.json');
+      const fmt = FORMATS.find((f) => f.id === state.fmt);
+      state.data = await getJson('data/' + state.key + fmt.suffix + '.json');
+      $('fmt-name').textContent = fmt.name;
       render();
     } catch (err) {
       if (initial) $('board').innerHTML = '<div class="empty">Couldn’t load projections. ' + esc(err.message) + '</div>';
@@ -320,8 +343,20 @@
 
   $('week').addEventListener('change', (e) => {
     state.key = e.target.value; state.game = null; state.open.clear(); state.limit = PAGE;
-    history.replaceState(null, '', '#' + state.key);
-    load(true);
+    load(true).then(syncHash);
+  });
+
+  function syncHash() {
+    const fmt = FORMATS.find((f) => f.id === state.fmt);
+    history.replaceState(null, '', '#' + state.key + fmt.suffix);
+  }
+
+  $('scoring').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-fmt]');
+    if (!b || b.disabled || b.dataset.fmt === state.fmt) return;
+    state.fmt = b.dataset.fmt; state.open.clear(); state.limit = PAGE;
+    try { localStorage.setItem('hedge-scoring', state.fmt); } catch {}
+    load(true).then(syncHash);
   });
 
   $('search').addEventListener('input', (e) => { state.q = e.target.value.trim().toLowerCase(); state.limit = PAGE; renderBoard(); });
