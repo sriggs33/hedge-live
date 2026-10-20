@@ -95,6 +95,8 @@
     background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; cursor: pointer;
   }
 
+  .note { background: var(--surface); border: 1px solid var(--border); box-shadow: inset 3px 0 0 var(--warn); border-radius: 10px; padding: 10px 14px 10px 16px; margin: 0 0 14px; color: var(--ink-2); font-size: 13.5px; max-width: 80ch; }
+  .note b { color: var(--ink); }
   .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
   .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; min-width: 0; }
   .stat .k { color: var(--muted); font-size: 12px; }
@@ -233,6 +235,9 @@
     </div>
   </header>
 
+  <aside class="note" id="backtest" hidden>
+    <b>Back-test week.</b> These lines were never shown before kickoff. They were priced after the fact, using only what was public before each game: earlier weeks' results, the injury report and the gameday roster. Treat them as a check on the model, not a published record.
+  </aside>
   <section class="stats" id="stats" aria-label="Summary"></section>
   <nav class="games" id="games" aria-label="Filter by game"></nav>
 
@@ -303,7 +308,7 @@
       if (!state.key) state.key = fromHash ? fromHash[1] + '-w' + fromHash[2] : cur.season + '-w' + cur.week;
       $('week').innerHTML = weeks.map((w) => {
         const k = w.season + '-w' + w.week;
-        return '<option value="' + k + '"' + (k === state.key ? ' selected' : '') + '>' + w.season + ' Week ' + w.week + (w.season === cur.season && w.week === cur.week ? ' (current)' : '') + '</option>';
+        return '<option value="' + k + '"' + (k === state.key ? ' selected' : '') + '>' + w.season + ' Week ' + w.week + (w.season === cur.season && w.week === cur.week ? ' (current)' : w.backtest ? ' (back-test)' : '') + '</option>';
       }).join('');
       state.data = await getJson('data/' + state.key + '.json');
       render();
@@ -331,6 +336,9 @@
     $('updated').title = new Date(d.generatedAt).toLocaleString();
     $('pulse').className = 'pulse' + (live ? '' : ' idle');
     $('model').textContent = 'Model ' + d.model + ' · curve ' + d.curve;
+    $('backtest').hidden = !d.backtest;
+    if (d.backtest) document.title = 'Hedge Week ' + d.week + ' Back-test';
+    $('title').textContent = 'NFL ' + d.season + ' Week ' + d.week + (d.backtest ? ' back-test' : ' projections');
 
     // Summary
     const graded = d.lines.filter((l) => l.result && l.result.side);
